@@ -1,5 +1,8 @@
 use std::fmt::Display;
 
+use super::token::{tokenize, Token};
+use super::ParseError;
+
 #[derive(Debug, Clone)]
 pub struct Version {
     pub major: u32,
@@ -44,47 +47,6 @@ impl Version {
     }
 }
 
-fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
-    let mut input = input.chars().peekable();
-    let mut curr = input.next();
-    let mut tokens = vec![];
-
-    while curr.is_some() {
-        let c = curr.unwrap();
-        match c {
-            ' ' | ',' => (),
-
-            '.' => tokens.push(Token::Dot),
-            '-' => tokens.push(Token::Hyphen),
-            '+' => tokens.push(Token::Plus),
-
-            '0' => tokens.push(Token::Number(c.to_digit(10).unwrap())),
-
-            n if n.is_alphanumeric() || n == '-' => {
-                let mut current_token = String::from(c);
-                while input
-                    .peek()
-                    .is_some_and(|c| c.is_alphanumeric() || n == '-')
-                {
-                    current_token.push(input.next().unwrap());
-                }
-
-                let token = match current_token.parse::<u32>() {
-                    Ok(number) => Token::Number(number),
-                    Err(_) => Token::AlphaNumeric(current_token),
-                };
-                tokens.push(token);
-            }
-
-            _ => return Err(ParseError::InvalidToken(c)),
-        }
-
-        curr = input.next();
-    }
-
-    Ok(tokens)
-}
-
 #[derive(Default)]
 struct VersionBuilder {
     major: Option<u32>,
@@ -94,7 +56,7 @@ struct VersionBuilder {
     metadata: Vec<String>,
 }
 
-fn build_from_tokens(tokens: &[Token]) -> Result<Version, ParseError> {
+pub fn build_from_tokens(tokens: &[Token]) -> Result<Version, ParseError> {
     if tokens.len() == 0 {
         return Err(ParseError::EmptyTokenList);
     }
@@ -215,39 +177,11 @@ fn build_from_tokens(tokens: &[Token]) -> Result<Version, ParseError> {
     })
 }
 
-#[derive(PartialEq)]
-enum Token {
-    Empty,
-
-    Dot,
-    Hyphen,
-    Plus,
-    Number(u32),
-    AlphaNumeric(String),
-}
-
 enum ParsingState {
     Core,
     PreRelease,
     Metadata,
 }
-
-#[derive(Debug, PartialEq)]
-pub enum ParseError {
-    EmptyInput,
-    EmptyTokenList,
-    InvalidToken(char),
-    InvalidTokenAt(usize),
-    MissingSymbolAt(usize),
-}
-
-impl Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl std::error::Error for ParseError {}
 
 #[cfg(test)]
 mod tests {
@@ -260,6 +194,18 @@ mod tests {
         assert_eq!(version.major, 1);
         assert_eq!(version.minor, 0);
         assert_eq!(version.patch, 0);
+
+        let v = "=2.1.1";
+        let version = Version::parse(v).unwrap();
+        assert_eq!(version.major, 2);
+        assert_eq!(version.minor, 1);
+        assert_eq!(version.patch, 1);
+
+        let v = "v5.1.123";
+        let version = Version::parse(v).unwrap();
+        assert_eq!(version.major, 5);
+        assert_eq!(version.minor, 1);
+        assert_eq!(version.patch, 123);
 
         let v = "20";
         let version = Version::parse(v).unwrap();
