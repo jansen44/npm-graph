@@ -3,7 +3,7 @@ use std::fmt::Display;
 use super::token::{tokenize, Token};
 use super::ParseError;
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct Version {
     pub major: u32,
     pub minor: u32,
@@ -44,6 +44,13 @@ impl Version {
 
         let tokens = tokenize(input)?;
         build_from_tokens(&tokens)
+    }
+
+    pub fn get_version_offset(&self) -> i64 {
+        let mj = self.major as i64 * 1_000_000;
+        let mn = self.minor as i64 * 10_000;
+        let p = self.patch as i64;
+        mj + mn + p
     }
 }
 

@@ -8,7 +8,6 @@ pub enum ParseError {
     Unexpected,
     EmptyInput,
     EmptyTokenList,
-    InvalidRangeCondition,
     InvalidToken(char),
     InvalidTokenAt(usize),
     MissingSymbolAt(usize),

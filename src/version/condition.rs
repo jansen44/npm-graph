@@ -1,10 +1,10 @@
 use super::{
     semver::Version,
-    token::{self, tokenize, Token},
+    token::{tokenize, Token},
     ParseError,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ConditionRange {
     Less(Version),
     LessEqual(Version),
@@ -24,7 +24,7 @@ impl std::fmt::Display for ConditionRange {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Condition {
     Any,
     Simple(Version),
@@ -71,6 +71,47 @@ impl Condition {
         let tokens = tokenize(input)?;
         build_from_tokens(&tokens)
     }
+
+    pub fn compare(&self, version: &Version) -> bool {
+        match self {
+            Condition::Any => true,
+            Condition::Simple(v) => v == version,
+            Condition::Compatible(v) => {
+                v.major == version.major && v.minor == version.minor && v.patch <= version.patch
+            }
+            Condition::CompatibleWithMostRecent(v) => {
+                !(v.major != version.major
+                    || v.minor > version.minor
+                    || (v.minor == version.minor && v.patch > version.patch))
+            }
+
+            Condition::Range(left, right) => {
+                let version = version.get_version_offset();
+
+                let left_offset = match left {
+                    ConditionRange::Greater(v) => v.get_version_offset() < version,
+                    ConditionRange::GreaterEqual(v) => v.get_version_offset() <= version,
+                    _ => unreachable!("NEVER BEGINS WITH LESS"),
+                };
+
+                if !left_offset {
+                    return false;
+                }
+
+                match right {
+                    Some(right) => match right {
+                        ConditionRange::Less(v) => v.get_version_offset() > version,
+                        ConditionRange::LessEqual(v) => v.get_version_offset() >= version,
+                        _ => unreachable!("NEVER BEGINS WITH LESS"),
+                    },
+                    None => true,
+                }
+            }
+            Condition::Composite(conditions) => {
+                conditions.iter().find(|c| c.compare(version)).is_some()
+            }
+        }
+    }
 }
 
 fn build_from_tokens(tokens: &[Token]) -> Result<Condition, ParseError> {
@@ -90,6 +131,9 @@ fn build_from_tokens(tokens: &[Token]) -> Result<Condition, ParseError> {
             tokens = &tokens[idx.unwrap() + 1..];
             idx = tokens.iter().position(|t| t == &Token::Or);
         }
+
+        let condition = build_from_tokens(tokens)?;
+        conditions.push(condition);
 
         return Ok(Condition::Composite(conditions));
     }
@@ -167,54 +211,51 @@ mod test {
     #[test]
     fn basic_cases() {
         let cond = "*";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(Condition::Any, _cond));
+        let cond = Condition::parse(cond).unwrap();
+        assert!(matches!(cond, Condition::Any));
 
         let cond = "=2.3.4";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Simple(Version {
                 major: 2,
                 minor: 3,
                 patch: 4,
-                metadata: vec![],
-                pre_release: vec![]
+                ..Default::default()
             }),
-            _cond
-        ));
+        );
 
         let cond = "~2.3";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Compatible(Version {
                 major: 2,
                 minor: 3,
-                patch: 0,
-                metadata: vec![],
-                pre_release: vec![]
+                ..Default::default()
             }),
-            _cond
-        ));
+        );
 
         let cond = "^52.13.194";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::CompatibleWithMostRecent(Version {
                 major: 52,
                 minor: 13,
                 patch: 194,
-                metadata: vec![],
-                pre_release: vec![]
+                ..Default::default()
             }),
-            _cond
-        ));
+        );
     }
 
     #[test]
     fn range_cases() {
         let cond = ">1.2.3";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Range(
                 ConditionRange::Greater(Version {
                     major: 1,
@@ -225,12 +266,12 @@ mod test {
                 }),
                 None
             ),
-            _cond
-        ));
+        );
 
         let cond = ">=4.15.3-beta.1";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Range(
                 ConditionRange::GreaterEqual(Version {
                     major: 4,
@@ -241,12 +282,12 @@ mod test {
                 }),
                 None
             ),
-            _cond
-        ));
+        );
 
         let cond = ">1.2.3 <4.15.3-beta.1";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Range(
                 ConditionRange::Greater(Version {
                     major: 1,
@@ -263,12 +304,12 @@ mod test {
                     pre_release: vec!["beta".to_string(), "1".to_string()]
                 })),
             ),
-            _cond
-        ));
+        );
 
         let cond = ">=1.2.3 <4.15.3";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Range(
                 ConditionRange::GreaterEqual(Version {
                     major: 1,
@@ -285,12 +326,12 @@ mod test {
                     pre_release: vec![]
                 })),
             ),
-            _cond
-        ));
+        );
 
         let cond = ">=1.2.3 <=4.15.3";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Range(
                 ConditionRange::GreaterEqual(Version {
                     major: 1,
@@ -307,91 +348,310 @@ mod test {
                     pre_release: vec![]
                 })),
             ),
-            _cond
-        ));
+        );
     }
 
     #[test]
     fn composite_cases() {
         let cond = ">=1.2.3 <=4.15.3 || 5";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Composite(vec![
                 Condition::Range(
                     ConditionRange::GreaterEqual(Version {
                         major: 1,
                         minor: 2,
                         patch: 3,
-                        metadata: vec![],
-                        pre_release: vec![]
+                        ..Default::default()
                     }),
                     Some(ConditionRange::LessEqual(Version {
                         major: 4,
                         minor: 15,
                         patch: 3,
-                        metadata: vec![],
-                        pre_release: vec![]
+                        ..Default::default()
                     })),
                 ),
                 Condition::Simple(Version {
                     major: 5,
-                    minor: 0,
-                    patch: 0,
-                    metadata: vec![],
-                    pre_release: vec![]
+                    ..Default::default()
                 })
-            ]),
-            _cond
-        ));
+            ])
+        );
 
         let cond = "1 || 2 || 3 || 4 || ^5";
-        let _cond = Condition::parse(cond).unwrap();
-        assert!(matches!(
+        let cond = Condition::parse(cond).unwrap();
+        assert_eq!(
+            cond,
             Condition::Composite(vec![
                 Condition::Simple(Version {
                     major: 1,
-                    minor: 0,
-                    patch: 0,
-                    metadata: vec![],
-                    pre_release: vec![]
+                    ..Default::default()
                 }),
                 Condition::Simple(Version {
                     major: 2,
-                    minor: 0,
-                    patch: 0,
-                    metadata: vec![],
-                    pre_release: vec![]
+                    ..Default::default()
                 }),
                 Condition::Simple(Version {
                     major: 3,
-                    minor: 0,
-                    patch: 0,
-                    metadata: vec![],
-                    pre_release: vec![]
+                    ..Default::default()
                 }),
                 Condition::Simple(Version {
                     major: 4,
-                    minor: 0,
-                    patch: 0,
-                    metadata: vec![],
-                    pre_release: vec![]
-                }),
-                Condition::Simple(Version {
-                    major: 5,
-                    minor: 0,
-                    patch: 0,
-                    metadata: vec![],
-                    pre_release: vec![]
+                    ..Default::default()
                 }),
                 Condition::CompatibleWithMostRecent(Version {
                     major: 5,
-                    minor: 0,
-                    patch: 0,
-                    metadata: vec![],
-                    pre_release: vec![]
-                }),
-            ]),
-            _cond
-        ));
+                    ..Default::default()
+                })
+            ])
+        );
+    }
+
+    #[test]
+    fn compare() {
+        let cond = "*";
+        let cond = Condition::parse(cond).unwrap();
+        assert!(cond.compare(&Version {
+            major: 1,
+            minor: 12,
+            patch: 90,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 6,
+            minor: 12,
+            patch: 9,
+            ..Default::default()
+        }));
+
+        let cond = "6.12.9";
+        let cond = Condition::parse(cond).unwrap();
+        assert!(cond.compare(&Version {
+            major: 6,
+            minor: 12,
+            patch: 9,
+            ..Default::default()
+        }));
+
+        let cond = "~5.1";
+        let cond = Condition::parse(cond).unwrap();
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 1,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 1,
+            patch: 10,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 5,
+            minor: 2,
+            patch: 12,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 5,
+            minor: 3,
+            ..Default::default()
+        }));
+
+        let cond = "^5.1";
+        let cond = Condition::parse(cond).unwrap();
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 1,
+            patch: 0,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 99,
+            patch: 10,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 1,
+            patch: 12,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 5,
+            minor: 0,
+            patch: 12,
+            ..Default::default()
+        }));
+
+        let cond = ">5.2 <=8.2";
+        let cond = Condition::parse(cond).unwrap();
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 3,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 5,
+            minor: 2,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 7,
+            minor: 1,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 8,
+            minor: 1,
+            patch: 1200,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 8,
+            minor: 1,
+            patch: 12,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 8,
+            minor: 2,
+            patch: 1,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 8,
+            minor: 3,
+            ..Default::default()
+        }));
+
+        let cond = ">5.2";
+        let cond = Condition::parse(cond).unwrap();
+        assert!(cond.compare(&Version {
+            major: 9999,
+            minor: 99,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 3,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 5,
+            minor: 2,
+            ..Default::default()
+        }));
+
+        let cond = ">=5.2";
+        let cond = Condition::parse(cond).unwrap();
+        assert!(cond.compare(&Version {
+            major: 9999,
+            minor: 99,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 3,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 2,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 5,
+            minor: 1,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 4,
+            minor: 1,
+            ..Default::default()
+        }));
+
+        let cond = ">=5.2 <7";
+        let cond = Condition::parse(cond).unwrap();
+        assert!(!cond.compare(&Version {
+            major: 7,
+            minor: 9,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 3,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 2,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 5,
+            minor: 1,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 7,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 6,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 6,
+            minor: 99,
+            ..Default::default()
+        }));
+
+        let cond = "1 || 2 || 3 || 4 || ^5";
+        let cond = Condition::parse(cond).unwrap();
+        dbg!(cond.clone());
+        assert!(cond.compare(&Version {
+            major: 1,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 2,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 3,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 4,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 99,
+            patch: 0,
+            ..Default::default()
+        }));
+        assert!(cond.compare(&Version {
+            major: 5,
+            minor: 9,
+            patch: 100,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 6,
+            ..Default::default()
+        }));
+        assert!(!cond.compare(&Version {
+            major: 6,
+            minor: 10,
+            ..Default::default()
+        }));
     }
 }
